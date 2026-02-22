@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>ZSlayerHeadlessTelemetry</AssemblyName>
+    <Version>1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <!-- Paths to the headless client install -->
+  <PropertyGroup>
+    <GamePath>\\HAYDEN-COLE-LAP\Users\coleb\Documents\SPT 2026 Headless</GamePath>
+    <ManagedPath>$(GamePath)\EscapeFromTarkov_Data\Managed</ManagedPath>
+    <PluginsPath>$(GamePath)\BepInEx\plugins</PluginsPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Analyzers" Version="1.*" PrivateAssets="all" />
+    <PackageReference Include="BepInEx.Core" Version="5.*" />
+    <PackageReference Include="BepInEx.PluginInfoProps" Version="1.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Game assemblies -->
+    <Reference Include="Assembly-CSharp" HintPath="$(ManagedPath)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(ManagedPath)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(ManagedPath)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(ManagedPath)\Newtonsoft.Json.dll" Private="false" />
+    <Reference Include="Comfort" HintPath="$(ManagedPath)\Comfort.dll" Private="false" />
+    <Reference Include="Comfort.Unity" HintPath="$(ManagedPath)\Comfort.Unity.dll" Private="false" />
+    <Reference Include="ItemComponent.Types" HintPath="$(ManagedPath)\ItemComponent.Types.dll" Private="false" />
+    <Reference Include="DissonanceVoip" HintPath="$(ManagedPath)\DissonanceVoip.dll" Private="false" />
+
+    <!-- SPT assemblies -->
+    <Reference Include="spt-common" HintPath="$(PluginsPath)\spt\spt-common.dll" Private="false" />
+    <Reference Include="spt-reflection" HintPath="$(PluginsPath)\spt\spt-reflection.dll" Private="false" />
+
+    <!-- Harmony (for ModulePatch) -->
+    <Reference Include="0Harmony" HintPath="$(GamePath)\BepInEx\core\0Harmony.dll" Private="false" />
+
+    <!-- Fika -->
+    <Reference Include="Fika.Core" HintPath="$(PluginsPath)\Fika\Fika.Core.dll" Private="false" />
+  </ItemGroup>
+
+</Project>
