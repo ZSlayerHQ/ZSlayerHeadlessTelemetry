@@ -38,6 +38,12 @@ public class Plugin : BaseUnityPlugin
         // Enable Harmony patches
         new OnDamagePatch().Enable();
 
+        // Report versions to server
+        var telemetryVersion = Info.Metadata.Version.ToString();
+        var fikaVersion = typeof(FikaBackendUtils).Assembly.GetName().Version?.ToString() ?? "?";
+        Log.LogInfo($"[ZSlayerHQ] Versions — Telemetry: {telemetryVersion}, Fika.Core: {fikaVersion}");
+        Reporter.Post("hello", new { telemetryVersion, fikaClientVersion = fikaVersion });
+
         // Async ping to verify server is reachable
         Reporter.PingAsync();
     }

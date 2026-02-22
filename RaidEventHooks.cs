@@ -13,6 +13,7 @@ using Fika.Core.Main.Utils;
 using Fika.Core.Modding;
 using Fika.Core.Modding.Events;
 using Fika.Core.Networking;
+using Fika.Core.Networking.LiteNetLib;
 using UnityEngine;
 
 namespace ZSlayerHeadlessTelemetry;
@@ -47,6 +48,9 @@ public class RaidEventHooks
 
     // Kill counter for raid summary
     private int _raidKillCount;
+
+    // Error deduplication (keyed by report name)
+    private readonly Dictionary<string, int> _errorCounts = new();
 
     // Per-player kill tracking (keyed by profileId)
     private readonly Dictionary<string, int> _playerKillCounts = new();
@@ -287,15 +291,15 @@ public class RaidEventHooks
 
             // Each report is isolated so one failure doesn't cascade to the rest
             _tickCount++;
-            try { ReportRaidState(); } catch (Exception ex) { Plugin.Log.LogWarning($"[ZSlayerHQ] RaidState error: {ex.Message}"); }
-            try { ReportPlayers(); } catch (Exception ex) { Plugin.Log.LogWarning($"[ZSlayerHQ] Players error: {ex.Message}"); }
-            try { ReportPerformance(); } catch (Exception ex) { Plugin.Log.LogWarning($"[ZSlayerHQ] Performance error: {ex.Message}"); }
+            try { ReportRaidState(); } catch (Exception ex) { LogReportError("RaidState", ex); }
+            try { ReportPlayers(); } catch (Exception ex) { LogReportError("Players", ex); }
+            try { ReportPerformance(); } catch (Exception ex) { LogReportError("Performance", ex); }
             if (_tickCount == 1 || _tickCount % 2 == 0)
             {
-                try { ReportBots(); } catch (Exception ex) { Plugin.Log.LogWarning($"[ZSlayerHQ] Bots error: {ex.Message}"); }
-                try { ReportDamageStats(); } catch (Exception ex) { Plugin.Log.LogWarning($"[ZSlayerHQ] DamageStats error: {ex.Message}"); }
+                try { ReportBots(); } catch (Exception ex) { LogReportError("Bots", ex); }
+                try { ReportDamageStats(); } catch (Exception ex) { LogReportError("DamageStats", ex); }
             }
-            try { RegisterDeathHandlers(); } catch (Exception ex) { Plugin.Log.LogWarning($"[ZSlayerHQ] DeathHandlers error: {ex.Message}"); }
+            try { RegisterDeathHandlers(); } catch (Exception ex) { LogReportError("DeathHandlers", ex); }
         }
     }
 
@@ -312,7 +316,7 @@ public class RaidEventHooks
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"[ZSlayerHQ] Position report error: {ex.Message}");
+                LogReportError("Positions", ex);
             }
         }
     }
@@ -450,7 +454,9 @@ public class RaidEventHooks
             if (server?.NetServer != null)
             {
                 peerPings = new Dictionary<int, int>();
-                foreach (var peer in server.NetServer.ConnectedPeerList)
+                var peerList = new List<LiteNetPeer>();
+                server.NetServer.GetConnectedPeers(peerList);
+                foreach (var peer in peerList)
                 {
                     peerPings[peer.Id] = peer.Ping;
                 }
@@ -1099,6 +1105,14 @@ public class RaidEventHooks
             WildSpawnType.sectantWarrior => "follower",
             _ => "scav"
         };
+    }
+
+    private void LogReportError(string reportName, Exception ex)
+    {
+        _errorCounts.TryGetValue(reportName, out var count);
+        _errorCounts[reportName] = ++count;
+        if (count == 1 || count % 10 == 0)
+            Plugin.Log.LogWarning($"[ZSlayerHQ] {reportName} error (x{count}): [{ex.GetType().Name}] {ex.Message}");
     }
 
     private class CoroutineHelper : MonoBehaviour { }
