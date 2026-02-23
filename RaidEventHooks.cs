@@ -66,6 +66,10 @@ public class RaidEventHooks
     // Wall clock fallback for raid timer
     private DateTime _raidStartWallClock = DateTime.MinValue;
 
+    // Snapshot of human players — updated every periodic tick, used at raid end
+    // (HumanPlayers may be cleared before OnGameEnded fires)
+    private List<FikaPlayer> _lastKnownHumans = new();
+
     // System-wide CPU tracking (P/Invoke delta-based)
     private long _lastSysIdle, _lastSysKernel, _lastSysUser;
 
@@ -214,6 +218,7 @@ public class RaidEventHooks
             });
 
             _registeredDeathHandlers.Clear();
+            _lastKnownHumans.Clear();
 
             Plugin.Log.LogInfo("[ZSlayerHQ] Raid ended — telemetry stopped, summary sent");
         }
@@ -355,6 +360,8 @@ public class RaidEventHooks
                 pmcAlive = humans.Count(p => !p.IsAI && p.HealthController?.IsAlive == true);
                 pmcDead = humans.Count(p => !p.IsAI && p.HealthController?.IsAlive == false);
                 totalHumans = humans.Count;
+                if (humans.Count > 0)
+                    _lastKnownHumans = new List<FikaPlayer>(humans);
             }
         }
         catch { /* disposed player — use 0 */ }
@@ -993,7 +1000,14 @@ public class RaidEventHooks
         if (game?.GameTimer != null)
             raidDuration = (int)game.GameTimer.PastTime.TotalSeconds;
 
+        // Wall-clock fallback if GameTimer already reset
+        if (raidDuration == 0 && _raidStartWallClock != DateTime.MinValue)
+            raidDuration = (int)(DateTime.UtcNow - _raidStartWallClock).TotalSeconds;
+
+        // HumanPlayers may already be cleared at raid end — use snapshot
         var humans = coopHandler.HumanPlayers ?? new List<FikaPlayer>();
+        if (humans.Count == 0 && _lastKnownHumans.Count > 0)
+            humans = _lastKnownHumans;
         var playerSummaries = new List<object>();
 
         foreach (var player in humans)
