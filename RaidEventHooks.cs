@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Comfort.Common;
 using EFT;
 using Fika.Core.Main.Components;
@@ -64,6 +65,9 @@ public class RaidEventHooks
 
     // Wall clock fallback for raid timer
     private DateTime _raidStartWallClock = DateTime.MinValue;
+
+    // System-wide CPU tracking (P/Invoke delta-based)
+    private long _lastSysIdle, _lastSysKernel, _lastSysUser;
 
     // Reflection cache for accessing protected Player fields
     private static readonly FieldInfo LastAggressorField =
@@ -446,19 +450,27 @@ public class RaidEventHooks
         var humans = coopHandler.HumanPlayers;
         if (humans == null) return;
 
-        // Try to get ping data from FikaServer
-        Dictionary<int, int> peerPings = null;
+        // Build ping mapping: match peers to non-local players by connection order
+        Dictionary<string, int> profilePings = null;
         try
         {
             var server = Singleton<FikaServer>.Instance;
             if (server?.NetServer != null)
             {
-                peerPings = new Dictionary<int, int>();
                 var peerList = new List<LiteNetPeer>();
                 server.NetServer.GetConnectedPeers(peerList);
-                foreach (var peer in peerList)
+                if (peerList.Count > 0)
                 {
-                    peerPings[peer.Id] = peer.Ping;
+                    var orderedPeers = peerList.OrderBy(p => p.Id).ToList();
+                    var nonLocalPlayers = humans.Where(p => !p.IsYourPlayer).OrderBy(p => p.NetId).ToList();
+
+                    profilePings = new Dictionary<string, int>();
+                    for (int i = 0; i < Math.Min(orderedPeers.Count, nonLocalPlayers.Count); i++)
+                    {
+                        var pid = nonLocalPlayers[i].ProfileId ?? "";
+                        if (!string.IsNullOrEmpty(pid))
+                            profilePings[pid] = orderedPeers[i].Ping;
+                    }
                 }
             }
         }
@@ -477,16 +489,9 @@ public class RaidEventHooks
                 {
                     pingMs = 0;
                 }
-                else if (peerPings != null && peerPings.Count > 0)
+                else if (profilePings != null && profilePings.TryGetValue(player.ProfileId ?? "", out var ping))
                 {
-                    // Try matching by NetId first
-                    if (peerPings.TryGetValue(player.NetId, out var ping))
-                        pingMs = ping;
-                    // Fallback: if only one unmatched peer, assign it
-                    else if (peerPings.Count == 1)
-                    {
-                        foreach (var p in peerPings.Values) { pingMs = p; break; }
-                    }
+                    pingMs = ping;
                 }
 
                 playerList.Add(new
@@ -566,6 +571,36 @@ public class RaidEventHooks
             };
         }
 
+        // System-wide CPU (delta-based via GetSystemTimes)
+        double systemCpuPercent = 0;
+        try
+        {
+            if (GetSystemTimes(out var sysIdle, out var sysKernel, out var sysUser))
+            {
+                if (_lastSysKernel > 0 || _lastSysUser > 0)
+                {
+                    var idleDelta = sysIdle - _lastSysIdle;
+                    var totalDelta = (sysKernel - _lastSysKernel) + (sysUser - _lastSysUser);
+                    if (totalDelta > 0)
+                        systemCpuPercent = Math.Round((1.0 - (double)idleDelta / totalDelta) * 100, 1);
+                }
+                _lastSysIdle = sysIdle;
+                _lastSysKernel = sysKernel;
+                _lastSysUser = sysUser;
+            }
+        }
+        catch { /* ignore */ }
+
+        // System-wide RAM (via GlobalMemoryStatusEx)
+        long systemRamUsedMb = 0;
+        try
+        {
+            var memStatus = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
+            if (GlobalMemoryStatusEx(ref memStatus))
+                systemRamUsedMb = (long)((memStatus.ullTotalPhys - memStatus.ullAvailPhys) / (1024 * 1024));
+        }
+        catch { /* ignore */ }
+
         _reporter.Post("performance", new
         {
             fps,
@@ -575,6 +610,8 @@ public class RaidEventHooks
             frameTimeMs = Math.Round(Time.deltaTime * 1000f, 1),
             memoryMb,
             cpuUsage,
+            systemCpuPercent,
+            systemRamUsedMb,
             systemInfo = _systemInfo
         });
     }
@@ -610,6 +647,7 @@ public class RaidEventHooks
         int scavsAlive = 0, scavsDead = 0;
         int raidersAlive = 0, raidersDead = 0;
         int roguesAlive = 0, roguesDead = 0;
+        int aiPmcsAlive = 0, aiPmcsDead = 0;
         var bosses = new List<object>();
 
         foreach (var kvp in allPlayers)
@@ -640,6 +678,13 @@ public class RaidEventHooks
                     continue;
                 }
 
+                // AI PMCs (bots with USEC/BEAR side — SPT's AI PMC system)
+                if (player.Side is EPlayerSide.Usec or EPlayerSide.Bear)
+                {
+                    if (alive) aiPmcsAlive++; else aiPmcsDead++;
+                    continue;
+                }
+
                 // Categorize by role
                 switch (role)
                 {
@@ -663,8 +708,8 @@ public class RaidEventHooks
             catch { /* skip disposed/invalid bot */ }
         }
 
-        var totalAlive = scavsAlive + raidersAlive + roguesAlive;
-        var totalDead = scavsDead + raidersDead + roguesDead;
+        var totalAlive = scavsAlive + raidersAlive + roguesAlive + aiPmcsAlive;
+        var totalDead = scavsDead + raidersDead + roguesDead + aiPmcsDead;
 
         // Log bot counts for diagnostics (only every 6th tick = ~30s)
         if (_tickCount % 6 == 0)
@@ -680,6 +725,7 @@ public class RaidEventHooks
             scavs = new { alive = scavsAlive, dead = scavsDead },
             raiders = new { alive = raidersAlive, dead = raidersDead },
             rogues = new { alive = roguesAlive, dead = roguesDead },
+            aiPmcs = new { alive = aiPmcsAlive, dead = aiPmcsDead },
             bosses,
             totalAI = new
             {
@@ -972,6 +1018,42 @@ public class RaidEventHooks
                 }
                 catch { /* ignore */ }
 
+                // Read SessionCounters for combat stats + XP breakdown
+                int damageDealt = 0, armorDamage = 0, headshots = 0, hits = 0, ammoUsed = 0, killStreak = 0;
+                double longestKill = 0, accuracy = 0;
+                int xpKill = 0, xpKillStreak = 0, xpDamage = 0, xpLooting = 0, xpExitStatus = 0, xpBodyPart = 0;
+                try
+                {
+                    var counters = player.Profile?.EftStats?.SessionCounters;
+                    if (counters != null)
+                    {
+                        damageDealt = (int)Math.Round(counters.GetFloat(SessionCounterTypesAbstractClass.CauseBodyDamage));
+                        armorDamage = (int)Math.Round(counters.GetFloat(SessionCounterTypesAbstractClass.CauseArmorDamage));
+                        headshots = (int)counters.GetLong(SessionCounterTypesAbstractClass.HeadShots);
+                        hits = (int)counters.GetLong(SessionCounterTypesAbstractClass.HitCount);
+                        ammoUsed = (int)counters.GetLong(SessionCounterTypesAbstractClass.AmmoUsed);
+                        longestKill = Math.Round(counters.GetFloat(SessionCounterTypesAbstractClass.LongestKillShot), 1);
+                        killStreak = (int)counters.GetLong(SessionCounterTypesAbstractClass.LongestKillStreak);
+                        // XP breakdown
+                        xpKill = (int)counters.GetLong(SessionCounterTypesAbstractClass.ExpKillBase);
+                        xpKillStreak = (int)counters.GetLong(SessionCounterTypesAbstractClass.ExpKillStreakBonus);
+                        xpDamage = (int)counters.GetLong(SessionCounterTypesAbstractClass.ExpDamage);
+                        xpLooting = (int)counters.GetLong(SessionCounterTypesAbstractClass.ExpLooting);
+                        xpExitStatus = (int)counters.GetLong(SessionCounterTypesAbstractClass.ExpExitStatus);
+                        xpBodyPart = (int)counters.GetLong(SessionCounterTypesAbstractClass.ExpKillBodyPartBonus);
+
+                        if (hits > 0 && ammoUsed > 0)
+                            accuracy = Math.Round((double)hits / ammoUsed, 3);
+                    }
+                }
+                catch (Exception scEx)
+                {
+                    Plugin.Log.LogWarning($"[ZSlayerHQ]   SessionCounters error for {player.Profile?.Nickname}: {scEx.Message}");
+                }
+
+                var playerLevel = player.Profile?.Info?.Level ?? 0;
+                var playerSide = player.Side.ToString().ToLowerInvariant();
+
                 playerSummaries.Add(new
                 {
                     name = player.Profile?.Nickname ?? "",
@@ -982,11 +1064,27 @@ public class RaidEventHooks
                     killedScav = killTypes.scav,
                     killedBoss = killTypes.boss,
                     deaths = alive ? 0 : 1,
-                    damageDealt = 0,
+                    damageDealt,
                     damageReceived = 0,
-                    accuracy = 0.0,
+                    accuracy,
                     xpEarned,
-                    lootValue = 0L
+                    lootValue = 0L,
+                    // Enhanced stats
+                    armorDamage,
+                    headshots,
+                    hits,
+                    ammoUsed,
+                    longestKill,
+                    killStreak,
+                    level = playerLevel,
+                    side = playerSide,
+                    // XP breakdown
+                    xpKill,
+                    xpKillStreak,
+                    xpDamage,
+                    xpLooting,
+                    xpExitStatus,
+                    xpBodyPart
                 });
 
                 Plugin.Log.LogInfo($"[ZSlayerHQ]   Player: {player.Profile?.Nickname} — {outcome}");
@@ -1080,7 +1178,8 @@ public class RaidEventHooks
     {
         if (player == null) return "unknown";
 
-        if (!player.IsObservedAI)
+        // Human players (IsAI is false for all human-controlled players, including observed ones)
+        if (!player.IsAI)
         {
             return player.Side switch
             {
@@ -1090,6 +1189,10 @@ public class RaidEventHooks
                 _ => "pmc"
             };
         }
+
+        // AI PMCs — bots with USEC/BEAR side (SPT's AI PMC system)
+        if (player.Side is EPlayerSide.Usec or EPlayerSide.Bear)
+            return "aipmc";
 
         var role = player.Profile?.Info?.Settings?.Role ?? WildSpawnType.marksman;
 
@@ -1116,4 +1219,29 @@ public class RaidEventHooks
     }
 
     private class CoroutineHelper : MonoBehaviour { }
+
+    // ══════════════════════════════════════════════════════════
+    //  P/Invoke — System-wide CPU & RAM
+    // ══════════════════════════════════════════════════════════
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetSystemTimes(out long idleTime, out long kernelTime, out long userTime);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MEMORYSTATUSEX
+    {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPageFile;
+        public ulong ullAvailPageFile;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
 }
