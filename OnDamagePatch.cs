@@ -34,7 +34,9 @@ public class OnDamagePatch : ModulePatch
             }
             catch { /* ignore position errors */ }
 
-            DamageTracker.RecordHit((int)bodyPartType, damageInfo.Damage, distance);
+            var attackerId = attacker.ProfileId ?? "";
+            var victimId = __instance.ProfileId ?? "";
+            DamageTracker.RecordHit(attackerId, victimId, (int)bodyPartType, damageInfo.Damage, distance);
         }
         catch { /* never crash the game */ }
     }

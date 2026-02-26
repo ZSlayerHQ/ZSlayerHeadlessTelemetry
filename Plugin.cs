@@ -5,7 +5,7 @@ using SPT.Common.Http;
 
 namespace ZSlayerHeadlessTelemetry;
 
-[BepInPlugin("com.zslayerhq.headlesstelemetry", "ZSlayer Headless Telemetry", "1.2.1")]
+[BepInPlugin("com.zslayerhq.headlesstelemetry", "ZSlayer Headless Telemetry", "1.3.1")]
 [BepInDependency("com.fika.core", BepInDependency.DependencyFlags.HardDependency)]
 public class Plugin : BaseUnityPlugin
 {

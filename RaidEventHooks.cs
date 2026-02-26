@@ -70,6 +70,9 @@ public class RaidEventHooks
     // (HumanPlayers may be cleared before OnGameEnded fires)
     private List<FikaPlayer> _lastKnownHumans = new();
 
+    // Inventory snapshots for raid profit tracking (keyed by profileId)
+    private readonly Dictionary<string, List<(string templateId, int count)>> _inventorySnapshots = new();
+
     // System-wide CPU tracking (P/Invoke delta-based)
     private long _lastSysIdle, _lastSysKernel, _lastSysUser;
 
@@ -114,6 +117,7 @@ public class RaidEventHooks
             _playerKillCounts.Clear();
             _playerKillTypes.Clear();
             _xpSnapshots.Clear();
+            _inventorySnapshots.Clear();
             DamageTracker.Reset();
             ResetFpsTracking();
             _tickCount = 0;
@@ -167,6 +171,34 @@ public class RaidEventHooks
                             _xpSnapshots[profileId] = xp;
                     }
                     Plugin.Log.LogInfo($"[ZSlayerHQ] XP snapshots taken for {_xpSnapshots.Count} players, map: {_currentMap}");
+
+                    // Snapshot inventory for raid profit tracking
+                    foreach (var player in _cachedCoopHandler.HumanPlayers ?? new List<FikaPlayer>())
+                    {
+                        try
+                        {
+                            var pid = player.ProfileId ?? "";
+                            if (string.IsNullOrEmpty(pid)) continue;
+                            var items = new List<(string, int)>();
+                            var allItems = player.Profile?.Inventory?.GetPlayerItems((EFT.InventoryLogic.EPlayerItems)2);
+                            if (allItems != null)
+                            {
+                                foreach (var item in allItems)
+                                {
+                                    try
+                                    {
+                                        var tpl = item.TemplateId.ToString();
+                                        if (!string.IsNullOrEmpty(tpl))
+                                            items.Add((tpl, item.StackObjectsCount));
+                                    }
+                                    catch { /* skip item */ }
+                                }
+                            }
+                            _inventorySnapshots[pid] = items;
+                        }
+                        catch { /* skip player */ }
+                    }
+                    Plugin.Log.LogInfo($"[ZSlayerHQ] Inventory snapshots taken for {_inventorySnapshots.Count} players");
                 }
             }
             catch (Exception xpEx)
@@ -263,26 +295,18 @@ public class RaidEventHooks
         }
     }
 
-    private void FetchMapRefreshRate()
+    private async void FetchMapRefreshRate()
     {
         try
         {
             // Ask server for the configured position update interval
+            // Uses reporter's shared HttpClient — no extra socket allocation
             var url = _reporter.BaseUrl + "/map-refresh-rate";
-            using var handler = new System.Net.Http.HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            };
-            using var http = new System.Net.Http.HttpClient(handler) { Timeout = TimeSpan.FromSeconds(2) };
-            var task = http.GetStringAsync(url);
-            task.Wait(2000);
-            if (task.IsCompleted)
-            {
-                var json = Newtonsoft.Json.Linq.JObject.Parse(task.Result);
-                var rate = (float?)json["intervalSec"] ?? 1.0f;
-                _positionIntervalSec = Mathf.Clamp(rate, 0.05f, 10f);
-                Plugin.Log.LogInfo($"[ZSlayerHQ] Map refresh rate: {_positionIntervalSec}s");
-            }
+            var result = await _reporter.Http.GetStringAsync(url);
+            var json = Newtonsoft.Json.Linq.JObject.Parse(result);
+            var rate = (float?)json["intervalSec"] ?? 1.0f;
+            _positionIntervalSec = Mathf.Clamp(rate, 0.05f, 10f);
+            Plugin.Log.LogInfo($"[ZSlayerHQ] Map refresh rate: {_positionIntervalSec}s");
         }
         catch (Exception ex)
         {
@@ -1033,7 +1057,7 @@ public class RaidEventHooks
                 catch { /* ignore */ }
 
                 // Read SessionCounters for combat stats + XP breakdown
-                int damageDealt = 0, armorDamage = 0, headshots = 0, hits = 0, ammoUsed = 0, killStreak = 0;
+                int damageDealt = 0, damageReceived = 0, armorDamage = 0, headshots = 0, hits = 0, ammoUsed = 0, killStreak = 0;
                 double longestKill = 0, accuracy = 0;
                 int xpKill = 0, xpKillStreak = 0, xpDamage = 0, xpLooting = 0, xpExitStatus = 0, xpBodyPart = 0;
                 try
@@ -1065,12 +1089,53 @@ public class RaidEventHooks
                     Plugin.Log.LogWarning($"[ZSlayerHQ]   SessionCounters error for {player.Profile?.Nickname}: {scEx.Message}");
                 }
 
+                // Backfill from DamageTracker for remote players whose SessionCounters are empty
+                var dmgStats = DamageTracker.GetPlayerStats(profileId);
+                if (dmgStats != null)
+                {
+                    if (damageDealt == 0) damageDealt = dmgStats.DamageDealt;
+                    if (damageReceived == 0) damageReceived = dmgStats.DamageReceived;
+                    if (hits == 0) hits = dmgStats.Hits;
+                    if (headshots == 0) headshots = dmgStats.Headshots;
+                    if (longestKill == 0) longestKill = dmgStats.LongestShot;
+                }
+
+                // Collect current inventory for raid profit
+                var inventoryAfter = new List<object>();
+                try
+                {
+                    var afterItems = player.Profile?.Inventory?.GetPlayerItems((EFT.InventoryLogic.EPlayerItems)2);
+                    if (afterItems != null)
+                    {
+                        foreach (var item in afterItems)
+                        {
+                            try
+                            {
+                                var tpl = item.TemplateId.ToString();
+                                if (!string.IsNullOrEmpty(tpl))
+                                    inventoryAfter.Add(new { templateId = tpl, count = item.StackObjectsCount });
+                            }
+                            catch { /* skip item */ }
+                        }
+                    }
+                }
+                catch { /* ignore inventory errors */ }
+
+                // Build inventoryBefore from snapshot
+                var inventoryBefore = new List<object>();
+                if (_inventorySnapshots.TryGetValue(profileId, out var beforeItems))
+                {
+                    foreach (var (tpl, cnt) in beforeItems)
+                        inventoryBefore.Add(new { templateId = tpl, count = cnt });
+                }
+
                 var playerLevel = player.Profile?.Info?.Level ?? 0;
                 var playerSide = player.Side.ToString().ToLowerInvariant();
 
                 playerSummaries.Add(new
                 {
                     name = player.Profile?.Nickname ?? "",
+                    profileId,
                     outcome,
                     extractPoint = extracted ? exitName : (string)null,
                     kills,
@@ -1079,7 +1144,7 @@ public class RaidEventHooks
                     killedBoss = killTypes.boss,
                     deaths = alive ? 0 : 1,
                     damageDealt,
-                    damageReceived = 0,
+                    damageReceived,
                     accuracy,
                     xpEarned,
                     lootValue = 0L,
@@ -1098,7 +1163,10 @@ public class RaidEventHooks
                     xpDamage,
                     xpLooting,
                     xpExitStatus,
-                    xpBodyPart
+                    xpBodyPart,
+                    // Inventory for profit calculation (server-side pricing)
+                    inventoryBefore,
+                    inventoryAfter
                 });
 
                 Plugin.Log.LogInfo($"[ZSlayerHQ]   Player: {player.Profile?.Nickname} — {outcome}");

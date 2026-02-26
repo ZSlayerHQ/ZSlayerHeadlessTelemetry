@@ -13,11 +13,13 @@ public class TelemetryReporter : IDisposable
     private readonly string _baseUrl;
     public string BaseUrl => _baseUrl;
     private readonly HttpClient _http;
+    public HttpClient Http => _http;
     private readonly ConcurrentQueue<QueuedPost> _queue = new();
     private readonly Thread _drainThread;
     private readonly CancellationTokenSource _cts = new();
     private const int MaxQueueSize = 64;
-    private bool _serverReachable = true;
+    private int _consecutiveFailures;
+    private const int MaxConsecutiveFailures = 10;
     private int _dropCount;
 
     public TelemetryReporter(string baseUrl)
@@ -48,7 +50,9 @@ public class TelemetryReporter : IDisposable
     /// </summary>
     public void Post<T>(string endpoint, T data)
     {
-        if (!_serverReachable) return;
+        // If too many consecutive failures, skip to avoid log spam / wasted work.
+        // Resets on any successful send — self-healing if server comes back.
+        if (_consecutiveFailures >= MaxConsecutiveFailures) return;
 
         // Ring buffer — drop oldest if full
         while (_queue.Count >= MaxQueueSize)
@@ -74,19 +78,18 @@ public class TelemetryReporter : IDisposable
 
     /// <summary>
     /// Async ping to check if server is reachable. Non-blocking.
+    /// No longer gates all future sends — consecutive failure counter handles that.
     /// </summary>
     public async void PingAsync()
     {
         try
         {
             var response = await _http.GetAsync($"{_baseUrl}/current");
-            _serverReachable = response.StatusCode != HttpStatusCode.ServiceUnavailable;
             Plugin.Log.LogInfo($"[ZSlayerHQ] Server ping: {response.StatusCode}");
         }
         catch (Exception ex)
         {
-            _serverReachable = false;
-            Plugin.Log.LogWarning($"[ZSlayerHQ] Server unreachable: {ex.Message}");
+            Plugin.Log.LogWarning($"[ZSlayerHQ] Server ping failed (will retry on next send): {ex.Message}");
         }
     }
 
@@ -125,10 +128,15 @@ public class TelemetryReporter : IDisposable
             {
                 Plugin.Log.LogWarning($"[ZSlayerHQ] POST {item.Url} → {task.Result.StatusCode}");
             }
+
+            // Success — reset failure counter (self-healing)
+            Interlocked.Exchange(ref _consecutiveFailures, 0);
         }
         catch (Exception)
         {
-            // Silently drop — don't retry, don't spam logs
+            var fails = Interlocked.Increment(ref _consecutiveFailures);
+            if (fails == MaxConsecutiveFailures)
+                Plugin.Log.LogWarning($"[ZSlayerHQ] {MaxConsecutiveFailures} consecutive send failures — pausing telemetry until server responds");
         }
     }
 
