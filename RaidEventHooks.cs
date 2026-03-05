@@ -1021,12 +1021,22 @@ public class RaidEventHooks
 
         var game = Singleton<IFikaGame>.Instance as CoopGame;
         int raidDuration = 0;
-        if (game?.GameTimer != null)
-            raidDuration = (int)game.GameTimer.PastTime.TotalSeconds;
+        try
+        {
+            if (game?.GameTimer != null)
+                raidDuration = (int)game.GameTimer.PastTime.TotalSeconds;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.LogWarning($"[ZSlayerHQ] GameTimer.PastTime threw: {ex.Message}");
+        }
 
-        // Wall-clock fallback if GameTimer already reset
+        // Wall-clock fallback if GameTimer already reset or threw
         if (raidDuration == 0 && _raidStartWallClock != DateTime.MinValue)
+        {
             raidDuration = (int)(DateTime.UtcNow - _raidStartWallClock).TotalSeconds;
+            Plugin.Log.LogInfo($"[ZSlayerHQ] Duration via wall-clock fallback: {raidDuration}s");
+        }
 
         // HumanPlayers may already be cleared at raid end — use snapshot
         var humans = coopHandler.HumanPlayers ?? new List<FikaPlayer>();
@@ -1040,7 +1050,7 @@ public class RaidEventHooks
             {
                 var alive = player.HealthController?.IsAlive ?? false;
                 var extracted = coopHandler.ExtractedPlayers?.Contains(player.NetId) ?? false;
-                var outcome = alive && extracted ? "survived" : alive ? "mia" : "killed";
+                var outcome = extracted ? "survived" : alive ? "mia" : "killed";
 
                 var profileId = player.ProfileId ?? "";
                 _playerKillCounts.TryGetValue(profileId, out var kills);
