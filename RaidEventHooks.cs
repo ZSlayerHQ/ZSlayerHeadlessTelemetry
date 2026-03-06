@@ -22,6 +22,8 @@ namespace ZSlayerHeadlessTelemetry;
 public class RaidEventHooks
 {
     private readonly TelemetryReporter _reporter;
+    private readonly LogStreamService _logStream;
+    private readonly string _sourceId;
     private bool _inRaid;
     private string _currentMap = "";
     private Coroutine _periodicCoroutine;
@@ -82,9 +84,13 @@ public class RaidEventHooks
     private static readonly FieldInfo LastDamageInfoField =
         typeof(Player).GetField("LastDamageInfo", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    public RaidEventHooks(TelemetryReporter reporter)
+    public bool IsInRaid => _inRaid;
+
+    public RaidEventHooks(TelemetryReporter reporter, LogStreamService logStream, string sourceId)
     {
         _reporter = reporter;
+        _logStream = logStream;
+        _sourceId = sourceId;
     }
 
     public void Subscribe()
@@ -125,6 +131,7 @@ public class RaidEventHooks
 
             _reporter.Post("raid-state", new
             {
+                sourceId = _sourceId,
                 status = "loading",
                 map = _currentMap,
                 raidTimer = 0,
@@ -208,6 +215,7 @@ public class RaidEventHooks
 
             _reporter.Post("raid-state", new
             {
+                sourceId = _sourceId,
                 status = "in-raid",
                 map = _currentMap,
                 raidTimer = 0,
@@ -240,6 +248,7 @@ public class RaidEventHooks
 
             _reporter.Post("raid-state", new
             {
+                sourceId = _sourceId,
                 status = "idle",
                 map = _currentMap,
                 raidTimer = 0,
@@ -333,6 +342,15 @@ public class RaidEventHooks
                 try { ReportDamageStats(); } catch (Exception ex) { LogReportError("DamageStats", ex); }
             }
             try { RegisterDeathHandlers(); } catch (Exception ex) { LogReportError("DeathHandlers", ex); }
+
+            // Flush console log buffer (during raid, every 5s)
+            try
+            {
+                var logEntries = _logStream.DrainBuffer();
+                if (logEntries.Count > 0)
+                    _reporter.Post("console", new { sourceId = _sourceId, entries = logEntries });
+            }
+            catch (Exception ex) { LogReportError("Console", ex); }
         }
     }
 
@@ -453,6 +471,7 @@ public class RaidEventHooks
         // Always post — never return early without posting
         _reporter.Post("raid-state", new
         {
+            sourceId = _sourceId,
             status = "in-raid",
             map = _currentMap,
             raidTimer,
@@ -542,6 +561,7 @@ public class RaidEventHooks
 
         _reporter.Post("players", new
         {
+            sourceId = _sourceId,
             map = _currentMap,
             players = playerList
         });
@@ -634,6 +654,7 @@ public class RaidEventHooks
 
         _reporter.Post("performance", new
         {
+            sourceId = _sourceId,
             fps,
             fpsAvg = _fpsCount > 0 ? Mathf.RoundToInt(_fpsSum / _fpsCount) : fps,
             fpsMin = _fpsMin < float.MaxValue ? Mathf.RoundToInt(_fpsMin) : fps,
@@ -752,6 +773,7 @@ public class RaidEventHooks
 
         _reporter.Post("bots", new
         {
+            sourceId = _sourceId,
             map = _currentMap,
             scavs = new { alive = scavsAlive, dead = scavsDead },
             raiders = new { alive = raidersAlive, dead = raidersDead },
@@ -809,6 +831,7 @@ public class RaidEventHooks
 
         _reporter.Post("positions", new
         {
+            sourceId = _sourceId,
             map = _currentMap,
             positions
         });
@@ -821,7 +844,7 @@ public class RaidEventHooks
     private void ReportDamageStats()
     {
         if (DamageTracker.TotalHits == 0) return;
-        _reporter.Post("damage-stats", DamageTracker.ToPayload());
+        _reporter.Post("damage-stats", DamageTracker.ToPayload(_sourceId));
     }
 
     // ══════════════════════════════════════════════════════════
@@ -958,6 +981,7 @@ public class RaidEventHooks
 
         _reporter.Post("kill", new
         {
+            sourceId = _sourceId,
             timestamp = DateTime.UtcNow,
             raidTime,
             map = _currentMap,
@@ -985,6 +1009,7 @@ public class RaidEventHooks
         {
             _reporter.Post("extract", new
             {
+                sourceId = _sourceId,
                 timestamp = DateTime.UtcNow,
                 map = _currentMap,
                 raidTime,
@@ -1224,6 +1249,7 @@ public class RaidEventHooks
 
         _reporter.Post("raid-summary", new
         {
+            sourceId = _sourceId,
             map = _currentMap,
             raidDuration,
             players = playerSummaries,

@@ -125,7 +125,7 @@ public static class DamageTracker
 
     public static double AvgDistance => TotalHits > 0 ? Math.Round(TotalDistance / TotalHits, 1) : 0;
 
-    public static object ToPayload()
+    public static object ToPayload(string sourceId = null)
     {
         // Build per-player payload
         var perPlayer = new Dictionary<string, object>();
@@ -154,6 +154,7 @@ public static class DamageTracker
 
         return new
         {
+            sourceId,
             totalHits = TotalHits,
             totalDamageDealt = TotalDamageDealt,
             headshotCount = HeadshotCount,
