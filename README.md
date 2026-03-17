@@ -5,6 +5,7 @@
 **Live raid telemetry plugin for SPT / FIKA headless clients**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-c8aa6e.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/v1.4.0-c8aa6e.svg)](https://github.com/ZSlayerHQ/ZSlayerHeadlessTelemetry/releases)
 [![SPT](https://img.shields.io/badge/SPT-4.0.x-c8aa6e.svg)]()
 [![FIKA](https://img.shields.io/badge/FIKA-Required-4a7c59.svg)]()
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.x-blue.svg)]()
@@ -45,8 +46,12 @@ Every **10 seconds**:
 - **Kill Events** — killer, victim, weapon, ammo, body part, distance, headshot flag
 - **Extractions** — player outcome (survived, MIA, killed), extract point
 
+**Continuously:**
+- **Console Log Streaming** — headless BepInEx console output streamed to CC server for remote viewing
+- **Per-Player Damage** — DamageDealt, DamageReceived, Hits, Headshots, LongestShot tracked per individual player
+
 **At raid end:**
-- **Raid Summary** — per-player scoreboard (kills by type, XP earned, outcome), boss states, full combat stats
+- **Raid Summary** — per-player scoreboard (kills by type, XP earned, outcome, raid profit), boss states, full combat stats, inventory snapshot diff
 
 ---
 
@@ -136,7 +141,7 @@ Each report in the periodic loop is individually try-caught — if one report fa
 |-------------|---------|
 | **SPT** | 4.0.x |
 | **FIKA** | Latest (hard dependency) |
-| **ZSlayer Command Center** | 2.2+ (server mod) |
+| **ZSlayer Command Center** | 2.12+ (server mod) |
 | **BepInEx** | 5.x (bundled with SPT) |
 
 ---
