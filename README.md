@@ -4,7 +4,7 @@
 
 **Live raid telemetry plugin for SPT / FIKA headless clients**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-c8aa6e.svg)](LICENSE)
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-c8aa6e.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/v1.4.0-c8aa6e.svg)](https://github.com/ZSlayerHQ/ZSlayerHeadlessTelemetry/releases)
 [![SPT](https://img.shields.io/badge/SPT-4.0.x-c8aa6e.svg)]()
 [![FIKA](https://img.shields.io/badge/FIKA-Required-4a7c59.svg)]()
@@ -180,4 +180,4 @@ Yes. The plugin fetches the configured rate from the Command Center server on ra
 
 ## License
 
-[MIT](LICENSE) — Built by [ZSlayerHQ / Ben Cole](https://github.com/ZSlayerHQ)
+[CC BY-NC-SA 4.0](LICENSE) — Built by [ZSlayerHQ / Ben Cole](https://github.com/ZSlayerHQ)
